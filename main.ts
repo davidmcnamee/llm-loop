@@ -84,12 +84,12 @@ async function askLlm<TSchema extends z.ZodType>(
         promptToUse = `${prompt}\n\nRespond *only* with valid JSON that matches this structure:\n${schemaDescription}`
     }
 
-    console.log('spawning claude in', cwd)
-    console.log('claude prompt', promptToUse)
+    console.info('spawning claude in:', cwd)
+    console.info('claude prompt:', promptToUse)
     for await (const message of query({
         prompt: promptToUse,
         options: {
-            maxTurns: 20,
+            maxTurns: 500,
             cwd,
             resume: sessionId ?? undefined,
             permissionMode: 'bypassPermissions'
