@@ -15,16 +15,20 @@ const DEBUG = process.env.DEBUG === 'true'
 
 async function startLoop() {
     await runEvery(1000 * 60 * 10, async () => {
-        const { response: allMessages } = await askLlm(`Are there any new slack messages in DM ${SELF_DM_CHANNEL}`, z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() })))
-        
+        const { response: allMessages } = await askLlm(
+            `Are there any new slack messages in DM ${SELF_DM_CHANNEL}`,
+            z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() }))
+        )
+
         await maybeParallelize(_.entries(_.groupBy(allMessages, (m) => m.threadId)), async ([threadId, threadMessages]) => {
             const existingSession = await prisma.task.findUnique({ where: { threadId } })
 
             let branchName = existingSession?.branchName
             if (!existingSession) {
                 let {
-                    response: { branchName }
-                } = await askLlm(`generate a branch name from the input prompt(s) (which you can pull via slack) ${JSON.stringify(threadMessages.map(x => x.messageId))}`, z.object({ branchName: z.string() }))
+                    response
+                } = await askLlm(`generate a branch name from the input prompt(s) (which you can pull via slack) ${JSON.stringify(threadMessages.map((x) => x.messageId))}`, z.object({ branchName: z.string() }))
+                branchName = response.branchName
                 await askLlm(`create a git worktree at ~/dev/worktrees/${branchName} and create a branch ${branchName} on that worktree`, z.void())
             }
             assertNotNull(branchName)
@@ -56,10 +60,21 @@ async function askLlm<TSchema extends z.ZodType>(
     schema: TSchema,
     { sessionId = null, cwd = DEFAULT_CWD }: { sessionId: string | null; cwd: string } = { sessionId: null, cwd: DEFAULT_CWD }
 ): Promise<{ response: z.infer<TSchema>; sessionId: string }> {
-    const schemaDescription = JSON.stringify(z.toJSONSchema(schema))
-    const promptWithSchema = `${prompt}\n\nRespond *only* with valid JSON that matches this structure:\n${schemaDescription}`
+    const isVoid = schema instanceof z.ZodVoid
+    const isString = schema instanceof z.ZodString
+
+    let promptToUse: string
+    if (isVoid) {
+        promptToUse = prompt
+    } else if (isString) {
+        promptToUse = `${prompt}\n\nRespond with only the requested string value, no JSON formatting.`
+    } else {
+        const schemaDescription = JSON.stringify(z.toJSONSchema(schema))
+        promptToUse = `${prompt}\n\nRespond *only* with valid JSON that matches this structure:\n${schemaDescription}`
+    }
+
     for await (const message of query({
-        prompt: promptWithSchema,
+        prompt: promptToUse,
         options: {
             maxTurns: 20,
             cwd,
@@ -69,22 +84,23 @@ async function askLlm<TSchema extends z.ZodType>(
     })) {
         if (message.type === 'result' && message.subtype === 'success') {
             let result = message.result
-            result = result.replace('```json', '').replace('```', '')
-            try {
-                const parsed = JSON.parse(result)
-                const validated = schema.parse(parsed)
-                return { response: validated, sessionId: message.session_id }
-            } catch (error) {
-                throw new Error('Failed to parse or validate result ' + result + ': ' + error)
+
+            if (isVoid) {
+                return { response: undefined as z.infer<TSchema>, sessionId: message.session_id }
+            } else if (isString) {
+                return { response: result as z.infer<TSchema>, sessionId: message.session_id }
+            } else {
+                result = result.replace('```json', '').replace('```', '')
+                try {
+                    const parsed = findAndParseJson(result)
+                    const validated = schema.parse(parsed)
+                    return { response: validated, sessionId: message.session_id }
+                } catch (error) {
+                    throw new Error('Failed to parse or validate result ' + result + ': ' + error)
+                }
             }
         } else if (message.type === 'result') {
-            let errMsg: string
-            if (message.subtype === 'error_max_turns') {
-                errMsg = 'Max turns exceeded'
-            } else {
-                errMsg = 'Unknown error'
-            }
-            throw new Error(errMsg + ' ' + JSON.stringify(message))
+            throw new Error('LLM failed to generate response ' + JSON.stringify(message))
         }
     }
     throw new Error('never')
@@ -120,6 +136,46 @@ function sleepUntil(time: number) {
     const now = new Date().getTime()
     const timeToSleep = Math.max(0, time - now)
     return new Promise((resolve) => setTimeout(resolve, timeToSleep))
+}
+
+function findMatchingBrackets(text: string): { startIdx: number; endIdx: number }[] {
+    const results: { startIdx: number; endIdx: number }[] = []
+    const stack: { char: string; index: number }[] = []
+    const openBrackets = ['{', '[']
+    const closeBrackets = ['}', ']']
+    const matchingPairs: Record<string, string> = { '{': '}', '[': ']' }
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i]
+
+        if (openBrackets.includes(char)) {
+            stack.push({ char, index: i })
+        } else if (closeBrackets.includes(char)) {
+            // Find the matching opening bracket in the stack
+            for (let j = stack.length - 1; j >= 0; j--) {
+                if (matchingPairs[stack[j].char] === char) {
+                    // Found matching pair
+                    const opening = stack[j]
+                    results.push({ startIdx: opening.index, endIdx: i })
+                    stack.splice(j, 1) // Remove the matched opening bracket
+                    break
+                }
+            }
+        }
+    }
+
+    return results
+}
+
+function findAndParseJson(text: string) {
+    const bracketPairs = findMatchingBrackets(text)
+    for (const { startIdx, endIdx } of _.sortBy(bracketPairs, (p) => p.startIdx - p.endIdx)) {
+        try {
+            const json = JSON.parse(text.slice(startIdx, endIdx + 1))
+            return json
+        } catch (error) {}
+    }
+    throw new Error('No JSON found in text')
 }
 
 startLoop()

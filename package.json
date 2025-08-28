@@ -20,6 +20,7 @@
     "@anthropic-ai/claude-code": "^1.0.95",
     "@prisma/client": "^6.15.0",
     "lodash": "^4.17.21",
+    "partial-json": "^0.1.7",
     "tsx": "^4.20.5",
     "zod": "^4.1.4"
   }
