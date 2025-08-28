@@ -25,9 +25,10 @@ async function startLoop() {
 
             let branchName = existingSession?.branchName
             if (!existingSession) {
-                let {
-                    response
-                } = await askLlm(`generate a branch name from the input prompt(s) (which you can pull via slack) ${JSON.stringify(threadMessages.map((x) => x.messageId))}`, z.object({ branchName: z.string() }))
+                let { response } = await askLlm(
+                    `generate a branch name from the input prompt(s) (which you can pull via slack) ${JSON.stringify(threadMessages.map((x) => x.messageId))}`,
+                    z.object({ branchName: z.string() })
+                )
                 branchName = response.branchName
                 await askLlm(`create a git worktree at ~/dev/worktrees/${branchName} and create a branch ${branchName} on that worktree`, z.void())
             }
@@ -36,7 +37,7 @@ async function startLoop() {
             const {
                 response: { responseTs },
                 sessionId
-            } = await askLlm(`Read these slack messages${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId}`, z.object({ responseTs: z.string() }), {
+            } = await askLlm(`Read these slack messages ${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId} using slack mcp`, z.object({ responseTs: z.string() }), {
                 sessionId: existingSession?.sessionId ?? null,
                 cwd: process.env.HOME + `/dev/worktrees/${branchName}`
             })
@@ -50,7 +51,10 @@ async function startLoop() {
             if (!existingSession) {
                 await prisma.task.create({ data: { threadId, sessionId, branchName, status } })
             }
-            await prisma.seenSlackMessages.createMany({ data: threadMessages.map((m) => ({ id: m.messageId })).concat([{ id: responseTs }]) })
+            for (const threadMsg of threadMessages) {
+                await prisma.seenSlackMessages.upsert({ where: { id: threadMsg.messageId }, create: { id: threadMsg.messageId }, update: { id: threadMsg.messageId } })
+            }
+            await prisma.seenSlackMessages.upsert({ where: { id: responseTs }, create: { id: responseTs }, update: { id: responseTs } })
         })
     })
 }
@@ -74,6 +78,7 @@ async function askLlm<TSchema extends z.ZodType>(
     }
 
     console.log('spawning claude in', cwd)
+    console.log('claude prompt', promptToUse)
     for await (const message of query({
         prompt: promptToUse,
         options: {
@@ -95,6 +100,7 @@ async function askLlm<TSchema extends z.ZodType>(
                 try {
                     const parsed = findAndParseJson(result)
                     const validated = schema.parse(parsed)
+                    console.log('validated response', validated)
                     return { response: validated, sessionId: message.session_id }
                 } catch (error) {
                     throw new Error('Failed to parse or validate result ' + result + ': ' + error)
@@ -180,3 +186,5 @@ function findAndParseJson(text: string) {
 }
 
 startLoop()
+    .then(() => console.log('done'))
+    .catch((e) => console.error(e))
