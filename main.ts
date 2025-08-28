@@ -5,6 +5,9 @@ import { z } from 'zod'
 
 const prisma = new PrismaClient()
 
+const LAST_IGNORED_MESSAGE = process.env.LAST_IGNORED_MESSAGE as string | undefined
+if(LAST_IGNORED_MESSAGE && typeof LAST_IGNORED_MESSAGE !== 'string') throw new Error('LAST_IGNORED_MESSAGE must be a string')
+
 const DEFAULT_CWD = process.env.DEFAULT_CWD as string
 if (typeof DEFAULT_CWD !== 'string') throw new Error('DEFAULT_CWD must be a string')
 
@@ -15,10 +18,14 @@ const DEBUG = process.env.DEBUG === 'true'
 
 async function startLoop() {
     await runEvery(1000 * 60 * 10, async () => {
-        const { response: allMessages } = await askLlm(
-            `Are there any new slack messages in DM ${SELF_DM_CHANNEL}`,
+        let { response: allMessages } = await askLlm(
+            `Are there any new slack messages in DM ${SELF_DM_CHANNEL} ${LAST_IGNORED_MESSAGE ? 'after ' + LAST_IGNORED_MESSAGE : ''}. Show me the lastest 10 messages in that DM`,
             z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() }))
         )
+
+        const found = await prisma.seenSlackMessages.findMany({ where: { id: { in: allMessages.map(m => m.messageId) } } });
+        const alreadySeenIds = new Set(found.map(f => f.id))
+        allMessages = allMessages.filter(m => !alreadySeenIds.has(m.messageId))
 
         await maybeParallelize(_.entries(_.groupBy(allMessages, (m) => m.threadId)), async ([threadId, threadMessages]) => {
             const existingSession = await prisma.task.findUnique({ where: { threadId } })
