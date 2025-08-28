@@ -44,7 +44,7 @@ async function startLoop() {
             const {
                 response: { responseTs },
                 sessionId
-            } = await askLlm(`Read these slack messages ${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId} using slack mcp in channel ${SELF_DM_CHANNEL}`, z.object({ responseTs: z.string() }), {
+            } = await askLlm(`Read these slack messages ${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId} using slack mcp in channel ${SELF_DM_CHANNEL}. If the user asked you to take any actions, you must perform those actions before replying.`, z.object({ responseTs: z.string() }), {
                 sessionId: existingSession?.sessionId ?? null,
                 cwd: process.env.HOME + `/dev/worktrees/${branchName}`
             })
