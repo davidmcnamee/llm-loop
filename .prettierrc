@@ -1,3 +1,8 @@
 {
-  "printWidth": 200
+  "printWidth": 220,
+  "trailingComma": "none",
+  "singleQuote": true,
+  "semi": false,
+  "tabWidth": 4,
+  "objectWrap": "collapse"
 }

@@ -1,9 +1,11 @@
 {
   "name": "llm-loop",
   "version": "1.0.0",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "tsx main.ts"
   },
   "author": "",
   "license": "ISC",
@@ -17,6 +19,8 @@
   "dependencies": {
     "@anthropic-ai/claude-code": "^1.0.95",
     "@prisma/client": "^6.15.0",
-    "lodash": "^4.17.21"
+    "lodash": "^4.17.21",
+    "tsx": "^4.20.5",
+    "zod": "^4.1.4"
   }
 }
