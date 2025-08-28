@@ -6,7 +6,7 @@ import { z } from 'zod'
 const prisma = new PrismaClient()
 
 const LAST_IGNORED_MESSAGE = process.env.LAST_IGNORED_MESSAGE as string | undefined
-if(LAST_IGNORED_MESSAGE && typeof LAST_IGNORED_MESSAGE !== 'string') throw new Error('LAST_IGNORED_MESSAGE must be a string')
+if (LAST_IGNORED_MESSAGE && typeof LAST_IGNORED_MESSAGE !== 'string') throw new Error('LAST_IGNORED_MESSAGE must be a string')
 
 const DEFAULT_CWD = process.env.DEFAULT_CWD as string
 if (typeof DEFAULT_CWD !== 'string') throw new Error('DEFAULT_CWD must be a string')
@@ -23,9 +23,9 @@ async function startLoop() {
             z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() }))
         )
 
-        const found = await prisma.seenSlackMessages.findMany({ where: { id: { in: allMessages.map(m => m.messageId) } } });
-        const alreadySeenIds = new Set(found.map(f => f.id))
-        allMessages = allMessages.filter(m => !alreadySeenIds.has(m.messageId))
+        const found = await prisma.seenSlackMessages.findMany({ where: { id: { in: allMessages.map((m) => m.messageId) } } })
+        const alreadySeenIds = new Set(found.map((f) => f.id))
+        allMessages = allMessages.filter((m) => !alreadySeenIds.has(m.messageId))
 
         await maybeParallelize(_.entries(_.groupBy(allMessages, (m) => m.threadId)), async ([threadId, threadMessages]) => {
             const existingSession = await prisma.task.findUnique({ where: { threadId } })
@@ -41,19 +41,32 @@ async function startLoop() {
             }
             assertNotNull(branchName)
 
-            const {
-                response: { responseTs },
-                sessionId
-            } = await askLlm(`Read these slack messages ${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId} using slack mcp in channel ${SELF_DM_CHANNEL}. If the user asked you to take any actions, you must perform those actions before replying.`, z.object({ responseTs: z.string() }), {
-                sessionId: existingSession?.sessionId ?? null,
-                cwd: process.env.HOME + `/dev/worktrees/${branchName}`
-            })
-            const {
-                response: { status }
-            } = await askLlm(`How would you describe the status of this task?`, z.object({ status: z.enum(['awaiting user', 'done', 'cancelled']) }), {
-                sessionId,
-                cwd: process.env.HOME + `/dev/worktrees/${branchName}`
-            })
+            let status = 'awaiting claude'
+            let responses = []
+            let sessionId = existingSession?.sessionId ?? null
+            while (status === 'awaiting claude') {
+                const {
+                    response: { responseTs },
+                    sessionId: newSessionId
+                } = await askLlm(
+                    `Read these slack messages ${JSON.stringify(
+                        threadMessages.map((x) => x.messageId)
+                    )}, and send a response to ${threadId} using slack mcp in channel ${SELF_DM_CHANNEL}. If the user asked you to take any actions, you must perform those actions before replying.`,
+                    z.object({ responseTs: z.string() }),
+                    {
+                        sessionId,
+                        cwd: process.env.HOME + `/dev/worktrees/${branchName}`
+                    }
+                )
+                responses.push(responseTs)
+                sessionId = newSessionId
+                const { response } = await askLlm(`How would you describe the status of this task?`, z.object({ status: z.enum(['awaiting user', 'awaiting claude', 'done', 'cancelled']) }), {
+                    sessionId,
+                    cwd: process.env.HOME + `/dev/worktrees/${branchName}`
+                })
+                status = response.status
+            }
+            assertNotNull(sessionId)
 
             if (!existingSession) {
                 await prisma.task.create({ data: { threadId, sessionId, branchName, status } })
@@ -61,7 +74,9 @@ async function startLoop() {
             for (const threadMsg of threadMessages) {
                 await prisma.seenSlackMessages.upsert({ where: { id: threadMsg.messageId }, create: { id: threadMsg.messageId }, update: { id: threadMsg.messageId } })
             }
-            await prisma.seenSlackMessages.upsert({ where: { id: responseTs }, create: { id: responseTs }, update: { id: responseTs } })
+            for (const responseTs of responses) {
+                await prisma.seenSlackMessages.upsert({ where: { id: responseTs }, create: { id: responseTs }, update: { id: responseTs } })
+            }
         })
     })
 }
