@@ -17,7 +17,7 @@ if (typeof SELF_DM_CHANNEL !== 'string') throw new Error('SELF_DM_CHANNEL must b
 const DEBUG = process.env.DEBUG === 'true'
 
 async function startLoop() {
-    await runEvery(1000 * 60 * 10, async () => {
+    await runEvery(1000 * 60 * 2, async () => {
         let { response: allMessages } = await askLlm(
             `Are there any new slack messages in DM ${SELF_DM_CHANNEL} ${LAST_IGNORED_MESSAGE ? 'after ' + LAST_IGNORED_MESSAGE : ''}. Show me the lastest 10 messages in that DM`,
             z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() }))
