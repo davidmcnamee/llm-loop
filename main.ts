@@ -11,10 +11,13 @@ if (typeof DEFAULT_CWD !== 'string') throw new Error('DEFAULT_CWD must be a stri
 const SELF_DM_CHANNEL = process.env.SELF_DM_CHANNEL as string
 if (typeof SELF_DM_CHANNEL !== 'string') throw new Error('SELF_DM_CHANNEL must be a string')
 
+const DEBUG = process.env.DEBUG === 'true'
+
 async function startLoop() {
     await runEvery(1000 * 60 * 10, async () => {
         const { response: allMessages } = await askLlm(`Are there any new slack messages in DM ${SELF_DM_CHANNEL}`, z.array(z.object({ threadId: z.string(), messageId: z.string() })))
-        for (const [threadId, threadMessages] of _.entries(_.groupBy(allMessages, (m) => m.threadId))) {
+        
+        await maybeParallelize(_.entries(_.groupBy(allMessages, (m) => m.threadId)), async ([threadId, threadMessages]) => {
             const existingSession = await prisma.task.findUnique({ where: { threadId } })
 
             let branchName = existingSession?.branchName
@@ -44,7 +47,7 @@ async function startLoop() {
                 await prisma.task.create({ data: { threadId, sessionId, branchName, status } })
             }
             await prisma.seenSlackMessages.createMany({ data: threadMessages.map((m) => ({ id: m.messageId })).concat([{ id: responseTs }]) })
-        }
+        })
     })
 }
 
@@ -83,6 +86,19 @@ async function askLlm<TSchema extends z.ZodType>(
         }
     }
     throw new Error('never')
+}
+
+async function maybeParallelize<T>(iter: AsyncIterable<T> | Iterable<T>, fn: (arg: T) => Promise<void>) {
+    const promises = []
+    for await (const arg of iter) {
+        promises.push(fn(arg))
+    }
+    if (DEBUG) {
+        for await (const __ of promises) {
+        }
+    } else {
+        await Promise.all(promises)
+    }
 }
 
 async function runEvery(intervalMs: number, callback: () => Promise<void>) {
