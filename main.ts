@@ -36,15 +36,15 @@ async function startLoop() {
             const {
                 response: { responseTs },
                 sessionId
-            } = await askLlm(`Read these slack messages ${threadMessages}, and send a response to ${threadId}`, z.object({ responseTs: z.string() }), {
+            } = await askLlm(`Read these slack messages${JSON.stringify(threadMessages.map((x) => x.messageId))}, and send a response to ${threadId}`, z.object({ responseTs: z.string() }), {
                 sessionId: existingSession?.sessionId ?? null,
-                cwd: `~/dev/worktrees/${branchName}`
+                cwd: process.env.HOME + `/dev/worktrees/${branchName}`
             })
             const {
                 response: { status }
             } = await askLlm(`How would you describe the status of this task?`, z.object({ status: z.enum(['awaiting user', 'done', 'cancelled']) }), {
-                sessionId: existingSession?.sessionId ?? sessionId,
-                cwd: `~/dev/worktrees/${branchName}`
+                sessionId,
+                cwd: process.env.HOME + `/dev/worktrees/${branchName}`
             })
 
             if (!existingSession) {
@@ -73,6 +73,7 @@ async function askLlm<TSchema extends z.ZodType>(
         promptToUse = `${prompt}\n\nRespond *only* with valid JSON that matches this structure:\n${schemaDescription}`
     }
 
+    console.log('spawning claude in', cwd)
     for await (const message of query({
         prompt: promptToUse,
         options: {
