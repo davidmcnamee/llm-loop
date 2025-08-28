@@ -15,7 +15,7 @@ const DEBUG = process.env.DEBUG === 'true'
 
 async function startLoop() {
     await runEvery(1000 * 60 * 10, async () => {
-        const { response: allMessages } = await askLlm(`Are there any new slack messages in DM ${SELF_DM_CHANNEL}`, z.array(z.object({ threadId: z.string(), messageId: z.string() })))
+        const { response: allMessages } = await askLlm(`Are there any new slack messages in DM ${SELF_DM_CHANNEL}`, z.array(z.object({ threadId: z.string().describe('thread id (or message id if it is the root of a thread)'), messageId: z.string() })))
         
         await maybeParallelize(_.entries(_.groupBy(allMessages, (m) => m.threadId)), async ([threadId, threadMessages]) => {
             const existingSession = await prisma.task.findUnique({ where: { threadId } })
@@ -24,7 +24,7 @@ async function startLoop() {
             if (!existingSession) {
                 let {
                     response: { branchName }
-                } = await askLlm(`generate a branch name from the input prompt ${threadMessages}`, z.object({ branchName: z.string() }))
+                } = await askLlm(`generate a branch name from the input prompt(s) (which you can pull via slack) ${JSON.stringify(threadMessages.map(x => x.messageId))}`, z.object({ branchName: z.string() }))
                 await askLlm(`create a git worktree at ~/dev/worktrees/${branchName} and create a branch ${branchName} on that worktree`, z.void())
             }
             assertNotNull(branchName)
@@ -57,17 +57,19 @@ async function askLlm<TSchema extends z.ZodType>(
     { sessionId = null, cwd = DEFAULT_CWD }: { sessionId: string | null; cwd: string } = { sessionId: null, cwd: DEFAULT_CWD }
 ): Promise<{ response: z.infer<TSchema>; sessionId: string }> {
     const schemaDescription = JSON.stringify(z.toJSONSchema(schema))
-    const promptWithSchema = `${prompt}\n\nRespond with valid JSON that matches this structure:\n${schemaDescription}`
+    const promptWithSchema = `${prompt}\n\nRespond *only* with valid JSON that matches this structure:\n${schemaDescription}`
     for await (const message of query({
         prompt: promptWithSchema,
         options: {
             maxTurns: 20,
             cwd,
-            resume: sessionId ?? undefined
+            resume: sessionId ?? undefined,
+            permissionMode: 'bypassPermissions'
         }
     })) {
         if (message.type === 'result' && message.subtype === 'success') {
-            const result = message.result
+            let result = message.result
+            result = result.replace('```json', '').replace('```', '')
             try {
                 const parsed = JSON.parse(result)
                 const validated = schema.parse(parsed)
