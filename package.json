@@ -17,7 +17,7 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^1.0.95",
+    "@anthropic-ai/claude-code": "^2.1.7",
     "@prisma/client": "^6.15.0",
     "lodash": "^4.17.21",
     "partial-json": "^0.1.7",
